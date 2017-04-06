@@ -103,6 +103,7 @@ int nullfd = -1;
 int daemonize = 1;
 int unknown_ok = 1;
 int routefd = -1;
+int stayup = 0;
 
 volatile sig_atomic_t quit;
 
@@ -294,6 +295,8 @@ routehandler(struct interface_info *ifi)
 		if ((client->flags & IS_RESPONSIBLE) == 0)
 			/* We're not responsible yet! */
 			break;
+		if (stayup)
+			break;
 		if (adding.s_addr != INADDR_ANY) {
 			strlcpy(ntoabuf, inet_ntoa(a), sizeof(ntoabuf));
 			rslt = asprintf(&errmsg, "%s, not %s, added to %s",
@@ -331,16 +334,26 @@ routehandler(struct interface_info *ifi)
 			break;
 		if (adding.s_addr == INADDR_ANY && client->active &&
 		    a.s_addr == client->active->address.s_addr) {
-			/* Tell the priv process active_addr is gone. */
-			log_warnx("Active address (%s) deleted; exiting",
-			    inet_ntoa(client->active->address));
-			memset(&b, 0, sizeof(b));
-			add_address(b, b);
-			/* No need to write resolv.conf now. */
-			client->flags &= ~IS_RESPONSIBLE;
-			quit = INTERNALSIG;
-			break;
+			if (!stayup) {
+				/* Tell the priv process active_addr is gone. */
+				log_warnx("Active address (%s) deleted; exiting",
+				    inet_ntoa(client->active->address));
+				memset(&b, 0, sizeof(b));
+				add_address(b, b);
+				/* No need to write resolv.conf now. */
+				client->flags &= ~IS_RESPONSIBLE;
+				quit = INTERNALSIG;
+				break;
+			} else {
+				log_warnx("Active address (%s) deleted: "
+				    "restarting",
+				    inet_ntoa(client->active->address));
+				quit = SIGHUP;
+				goto done;
+			}
 		}
+		if (stayup)
+			break;
 		if (deleting.s_addr != INADDR_ANY) {
 			strlcpy(ntoabuf, inet_ntoa(a), sizeof(ntoabuf));
 			rslt = asprintf(&errmsg, "%s, not %s, deleted from %s",
@@ -357,8 +370,15 @@ routehandler(struct interface_info *ifi)
 		if (ifm->ifm_index != ifi->index)
 			break;
 		if ((rtm->rtm_flags & RTF_UP) == 0) {
-			rslt = asprintf(&errmsg, "%s down", ifi->name);
-			goto die;
+			if (!stayup) {
+				rslt = asprintf(&errmsg, "%s down", ifi->name);
+				goto die;
+			} else {
+				log_warnx("Interface %s down; restarting",
+				    ifi->name);
+				quit = SIGHUP;
+				goto done;
+			}
 		}
 
 		if (ifi->flags & IFI_VALID_LLADDR) {
@@ -441,7 +461,7 @@ main(int argc, char *argv[])
 	struct passwd *pw;
 	char *ignore_list = NULL;
 	ssize_t tailn;
-	int rtfilter, tailfd, q_flag, d_flag;
+	int rtfilter, tailfd, q_flag, d_flag, f_flag;
 
 	saved_argv = argv;
 
@@ -454,13 +474,16 @@ main(int argc, char *argv[])
 	log_setverbose(1);
 
 	q_flag = d_flag = 0;
-	while ((ch = getopt(argc, argv, "c:di:l:L:qu")) != -1)
+	while ((ch = getopt(argc, argv, "c:dfi:l:L:qu")) != -1)
 		switch (ch) {
 		case 'c':
 			path_dhclient_conf = optarg;
 			break;
 		case 'd':
 			d_flag = 1;
+			break;
+		case 'f':
+			f_flag = 1;
 			break;
 		case 'i':
 			ignore_list = optarg;
@@ -499,6 +522,9 @@ main(int argc, char *argv[])
 
 	if (d_flag)
 		daemonize = 0;
+
+	if (f_flag)
+		stayup = 1;
 
 	if (q_flag)
 		log_perror = 0;

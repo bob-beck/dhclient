@@ -94,6 +94,19 @@ If this option is specified,
 .Nm
 will run in the foreground and log to
 .Em stderr .
+.It Fl f
+Force.
+Normally
+.Nm
+will exit if the interface is externally manipulated.
+If the force option is specified
+.Nm
+will ignore external address deletions and additions
+which will allow interface aliases to be added and removed
+manually.
+.Nm
+will restart if the active address is deleted or
+the interface is downed,
 .It Fl i Ar options
 .Nm
 will ignore any values provided by leases for the options specified.
